@@ -4,7 +4,7 @@ import { describeAndModify } from "@/lib/llm";
 import { saveImage } from "@/lib/store";
 import { rateLimit } from "@/lib/ratelimit";
 
-export const maxDuration = 180;
+export const maxDuration = 60; // fits Vercel Hobby plan's function limit
 
 // NVIDIA's shared trial endpoints reject arbitrary input images, so true
 // img2img is unavailable. Instead a vision model studies the upload, writes a

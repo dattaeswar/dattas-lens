@@ -6,7 +6,7 @@ import { rateLimit } from "@/lib/ratelimit";
 import { enhancePrompt, enhanceBackground } from "@/lib/llm";
 import { composeTitle, Placement } from "@/lib/poster";
 
-export const maxDuration = 120;
+export const maxDuration = 60; // fits Vercel Hobby plan's function limit
 
 interface GenerateBody {
   prompt?: unknown;
