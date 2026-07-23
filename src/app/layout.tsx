@@ -100,8 +100,7 @@ export default function RootLayout({
         </header>
         <div className="flex flex-1 flex-col">{children}</div>
         <footer className="border-t border-line py-5 text-center text-xs text-muted">
-          Datta&apos;s Lens can make mistakes. Verify important information. ·
-          Powered by FLUX.2 on NVIDIA GPUs
+          Datta&apos;s Lens can make mistakes. Verify important information.
         </footer>
       </body>
     </html>
