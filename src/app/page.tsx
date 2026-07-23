@@ -11,7 +11,7 @@ const FEATURES = [
   {
     emoji: "⚡",
     title: "Seconds, not minutes",
-    body: "FLUX.2 running on NVIDIA GPUs returns finished images in roughly three seconds.",
+    body: "Finished images in roughly three seconds — no waiting around for a render.",
   },
   {
     emoji: "✍️",

@@ -38,7 +38,7 @@ export default function OpengraphImage() {
           Datta&apos;s Lens
         </div>
         <div style={{ display: "flex", fontSize: 32, color: "#877e70", marginTop: 18 }}>
-          AI image &amp; poster studio · powered by FLUX.2
+          AI poster &amp; social graphic studio
         </div>
       </div>
     ),
