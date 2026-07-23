@@ -18,10 +18,38 @@ const playfair = Playfair_Display({
   subsets: ["latin"],
 });
 
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://dattas-lens.vercel.app";
+const TITLE = "Datta's Lens — AI Image Studio";
+const DESCRIPTION =
+  "Generate and reimagine images, posters and art in seconds. Powered by FLUX.2 on NVIDIA GPUs.";
+
 export const metadata: Metadata = {
-  title: "Datta's Lens — AI Image Studio",
-  description:
-    "Generate and reimagine images, posters and art in seconds. Powered by FLUX.2 on NVIDIA GPUs.",
+  metadataBase: new URL(SITE_URL),
+  title: { default: TITLE, template: "%s · Datta's Lens" },
+  description: DESCRIPTION,
+  keywords: [
+    "AI image generator",
+    "AI poster maker",
+    "text to image",
+    "FLUX",
+    "image editing",
+  ],
+  openGraph: {
+    title: TITLE,
+    description: DESCRIPTION,
+    url: SITE_URL,
+    siteName: "Datta's Lens",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: TITLE,
+    description: DESCRIPTION,
+  },
+};
+
+export const viewport = {
+  themeColor: "#faf6ee",
 };
 
 export default function RootLayout({
