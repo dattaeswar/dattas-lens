@@ -14,14 +14,14 @@ const FEATURES = [
     body: "FLUX.2 running on NVIDIA GPUs returns finished images in roughly three seconds.",
   },
   {
-    emoji: "🪄",
-    title: "AI-enhanced prompts",
-    body: "A language model rewrites your idea with pro art direction — and spells on-image text correctly.",
+    emoji: "✍️",
+    title: "Perfectly spelled titles",
+    body: "AI image models garble text — ours doesn't. Titles are typeset separately and composited on top, always crisp and correctly spelled.",
   },
   {
-    emoji: "🖼️",
-    title: "Upload & reimagine",
-    body: "Drop in your own photo, say what to change, and the studio recreates it your way.",
+    emoji: "🪄",
+    title: "AI-enhanced prompts",
+    body: "A language model rewrites your idea with richer, more specific art direction before it hits the image model.",
   },
   {
     emoji: "🎨",
@@ -50,9 +50,8 @@ export default function Home() {
           <span className="inline-block animate-pulse">✳</span>
         </h1>
         <p className="mx-auto mt-6 max-w-xl text-lg leading-8 text-muted">
-          Ask me for anything visual — posters, product shots, concept art,
-          logos. I generate it in seconds, or reimagine the photos you already
-          have.
+          Ask me for a poster, product shot or concept scene — I generate it
+          in seconds, with titles that are always spelled right.
         </p>
         <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
           <Link

@@ -21,7 +21,7 @@ const playfair = Playfair_Display({
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://dattas-lens.vercel.app";
 const TITLE = "Datta's Lens — AI Image Studio";
 const DESCRIPTION =
-  "Generate and reimagine images, posters and art in seconds. Powered by FLUX.2 on NVIDIA GPUs.";
+  "Generate posters, social graphics and art from a prompt in seconds — with titles that are always spelled right. Powered by FLUX.2 on NVIDIA GPUs.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
@@ -32,7 +32,7 @@ export const metadata: Metadata = {
     "AI poster maker",
     "text to image",
     "FLUX",
-    "image editing",
+    "social media graphics",
   ],
   openGraph: {
     title: TITLE,

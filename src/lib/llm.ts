@@ -2,7 +2,6 @@ import { fetchWithRetry } from "./http";
 
 const CHAT_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 const ENHANCE_MODEL = "meta/llama-3.1-8b-instruct";
-const VISION_MODEL = "meta/llama-3.2-11b-vision-instruct";
 
 function apiKey(): string {
   const key = process.env.NVIDIA_API_KEY;
@@ -10,16 +9,9 @@ function apiKey(): string {
   return key;
 }
 
-type ChatContent =
-  | string
-  | Array<
-      | { type: "text"; text: string }
-      | { type: "image_url"; image_url: { url: string } }
-    >;
-
 async function chat(
   model: string,
-  messages: Array<{ role: string; content: ChatContent }>,
+  messages: Array<{ role: string; content: string }>,
   maxTokens: number,
   timeoutMs = 60_000,
 ): Promise<string> {
@@ -104,41 +96,6 @@ export async function enhanceBackground(
       { role: "user", content: userPrompt },
     ],
     250,
-  );
-  return out.replace(/^["'`]+|["'`]+$/g, "").trim();
-}
-
-const EDIT_SYSTEM = `You write prompts for the FLUX image generation model. You will receive an image and a modification request. Write ONE generation prompt that recreates the image's subject, framing and composition — BUT with the modification decisively applied.
-
-Critical rules:
-- The modification OVERRIDES the original wherever they conflict. If the request changes the color, style, medium, mood, or setting, describe the NEW value and never restate the old one. (e.g. request "make the apple green, watercolor" → write "a green apple, watercolor painting…", NOT "a red apple".)
-- Lead the prompt with the modification so it dominates.
-- Keep the parts that were NOT asked to change (composition, framing, other objects, any visible text — quote text exactly).
-
-Output the final prompt only: one paragraph, under 90 words, no preamble, no explanations.`;
-
-/**
- * Describe the supplied image (data URL) and merge in the user's requested
- * modification, returning a FLUX generation prompt.
- */
-export async function describeAndModify(
-  imageDataUrl: string,
-  instruction: string,
-): Promise<string> {
-  const out = await chat(
-    VISION_MODEL,
-    [
-      { role: "system", content: EDIT_SYSTEM },
-      {
-        role: "user",
-        content: [
-          { type: "text", text: `Modification request: ${instruction}` },
-          { type: "image_url", image_url: { url: imageDataUrl } },
-        ],
-      },
-    ],
-    350,
-    90_000,
   );
   return out.replace(/^["'`]+|["'`]+$/g, "").trim();
 }

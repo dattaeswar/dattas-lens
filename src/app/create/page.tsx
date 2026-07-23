@@ -1,12 +1,6 @@
 "use client";
 
-import {
-  Suspense,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { STYLE_PRESETS } from "@/lib/styles";
 
@@ -40,56 +34,10 @@ function ratioToCss(r: string): string {
   return `${w} / ${h}`;
 }
 
-function nearestRatio(w: number, h: number): string {
-  const target = w / h;
-  let best = "1:1";
-  let bestDiff = Infinity;
-  for (const opt of RATIO_OPTIONS) {
-    const [rw, rh] = opt.value.split(":").map(Number);
-    const diff = Math.abs(rw / rh - target);
-    if (diff < bestDiff) {
-      bestDiff = diff;
-      best = opt.value;
-    }
-  }
-  return best;
-}
-
-/** Downscale an uploaded file to ≤1280px JPEG data URL (keeps API payloads small). */
-function fileToDataUrl(file: File): Promise<{ dataUrl: string; w: number; h: number }> {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      const maxSide = 1280;
-      const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
-      const w = Math.round(img.width * scale);
-      const h = Math.round(img.height * scale);
-      const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return reject(new Error("Canvas unavailable"));
-      ctx.drawImage(img, 0, 0, w, h);
-      resolve({ dataUrl: canvas.toDataURL("image/jpeg", 0.82), w, h });
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error("Could not read that image"));
-    };
-    img.src = url;
-  });
-}
-
 function StudioInner() {
   const searchParams = useSearchParams();
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const titleRef = useRef<HTMLDivElement>(null);
 
-  const [mode, setMode] = useState<"create" | "edit">("create");
-
-  // create state
   const [prompt, setPrompt] = useState(
     () => searchParams.get("prompt") ?? "",
   );
@@ -109,13 +57,6 @@ function StudioInner() {
   );
   const [showTitle, setShowTitle] = useState(false);
 
-  // edit state
-  const [uploadedImage, setUploadedImage] = useState<string | null>(null);
-  const [uploadRatio, setUploadRatio] = useState("1:1");
-  const [instruction, setInstruction] = useState("");
-  const [dragOver, setDragOver] = useState(false);
-
-  // shared state
   const [busy, setBusy] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const [results, setResults] = useState<GeneratedImage[]>([]);
@@ -145,44 +86,18 @@ function StudioInner() {
     };
   }, []);
 
-  async function handleFile(file: File | undefined) {
-    if (!file || !file.type.startsWith("image/")) return;
-    try {
-      const { dataUrl, w, h } = await fileToDataUrl(file);
-      setUploadedImage(dataUrl);
-      setUploadRatio(nearestRatio(w, h));
-      setErrors([]);
-    } catch (err) {
-      setErrors([(err as Error).message]);
-    }
-  }
-
   async function generate() {
-    if (busy) return;
-    if (mode === "create" && !prompt.trim()) return;
-    if (mode === "edit" && (!uploadedImage || !instruction.trim())) return;
+    if (busy || !prompt.trim()) return;
 
     setBusy(true);
     setErrors([]);
     setResults([]);
-    const runs = mode === "create" ? count : 1;
-    setPendingCount(runs);
+    setPendingCount(count);
 
     const seedNum = seed ? parseInt(seed, 10) : 0;
 
-    const makeRequest = (i: number) => {
-      if (mode === "edit") {
-        return fetch("/api/edit", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            image: uploadedImage,
-            instruction: instruction.trim(),
-            aspectRatio: uploadRatio,
-          }),
-        });
-      }
-      return fetch("/api/generate", {
+    const makeRequest = (i: number) =>
+      fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -198,9 +113,8 @@ function StudioInner() {
           placement,
         }),
       });
-    };
 
-    const tasks = Array.from({ length: runs }, (_, i) =>
+    const tasks = Array.from({ length: count }, (_, i) =>
       makeRequest(i)
         .then(async (res) => {
           const data = await res.json();
@@ -219,7 +133,6 @@ function StudioInner() {
   }
 
   function remix(img: GeneratedImage) {
-    setMode("create");
     setPrompt(img.prompt);
     setStyleId(
       STYLE_PRESETS.some((s) => s.id === img.style) ? img.style : "none",
@@ -236,12 +149,7 @@ function StudioInner() {
     setHistory((prev) => prev.filter((r) => r.id !== id));
   }
 
-  const canGenerate =
-    mode === "create"
-      ? prompt.trim().length > 0
-      : Boolean(uploadedImage) && instruction.trim().length > 0;
-
-  const resultRatio = mode === "create" ? aspectRatio : uploadRatio;
+  const canGenerate = prompt.trim().length > 0;
 
   const wantsText =
     /\b(poster|flyer|banner|title|text|caption|headline|sign|logo|cover|quote|slogan|words?)\b/i.test(
@@ -257,304 +165,198 @@ function StudioInner() {
         Studio
       </h1>
 
-      {/* mode tabs */}
-      <div className="mb-7 flex w-full max-w-sm rounded-full border border-line bg-surface p-1 text-sm font-medium">
-        <button
-          onClick={() => setMode("create")}
-          className={`flex-1 rounded-full py-2 transition-colors ${
-            mode === "create" ? "bg-accent text-white" : "text-muted hover:text-foreground"
-          }`}
-        >
-          ✳ Create
-        </button>
-        <button
-          onClick={() => setMode("edit")}
-          className={`flex-1 rounded-full py-2 transition-colors ${
-            mode === "edit" ? "bg-accent text-white" : "text-muted hover:text-foreground"
-          }`}
-        >
-          🖼 Reimagine
-        </button>
-      </div>
-
-      <div className="grid gap-8 lg:grid-cols-[400px_1fr]">
+      <div className="grid min-w-0 gap-8 md:grid-cols-[340px_1fr] lg:grid-cols-[400px_1fr]">
         {/* ---------- controls ---------- */}
-        <div className="space-y-6">
-          {mode === "create" ? (
-            <>
-              <div>
-                <label className="mb-2 block text-sm font-medium">Prompt</label>
-                <textarea
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey))
-                      generate();
-                  }}
-                  rows={4}
-                  placeholder="A travel poster for Kashmir — snow peaks, a shikara on Dal Lake, autumn chinar trees…"
-                  className={`${inputCls} resize-none`}
-                />
-                <div className="mt-2 flex items-center justify-between">
-                  <button
-                    onClick={() => setEnhance(!enhance)}
-                    className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
-                      enhance ? "pill-active pill" : "pill"
-                    }`}
-                    title="An AI rewrites your idea with richer art direction"
-                  >
-                    🪄 AI enhance {enhance ? "on" : "off"}
-                  </button>
-                  <p className="text-xs text-muted">Ctrl+Enter to generate</p>
-                </div>
-                {wantsText && !showTitle && (
-                  <button
-                    onClick={() => {
-                      setShowTitle(true);
-                      titleRef.current?.scrollIntoView({
-                        behavior: "smooth",
-                        block: "center",
-                      });
-                    }}
-                    className="mt-2 w-full rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-left text-xs leading-5 text-foreground"
-                  >
-                    💡 Looks like you want a poster with words. The AI can&apos;t
-                    spell reliably — <b>tap here to add crisp title text</b>{" "}
-                    instead.
-                  </button>
-                )}
-              </div>
-
-              <div>
-                <label className="mb-2 block text-sm font-medium">Style</label>
-                <div className="flex flex-wrap gap-2">
-                  {STYLE_PRESETS.map((s) => (
-                    <button
-                      key={s.id}
-                      onClick={() => setStyleId(s.id)}
-                      className={`pill rounded-full px-3 py-1.5 text-xs ${
-                        styleId === s.id ? "pill-active" : ""
-                      }`}
-                    >
-                      {s.emoji} {s.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="mb-2 block text-sm font-medium">Format</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {RATIO_OPTIONS.map((r) => (
-                    <button
-                      key={r.value}
-                      onClick={() => setAspectRatio(r.value)}
-                      className={`pill flex flex-col items-center rounded-xl px-2 py-2.5 text-xs ${
-                        aspectRatio === r.value ? "pill-active" : ""
-                      }`}
-                    >
-                      <span
-                        className="mb-1.5 block w-5 rounded-[3px] border border-current opacity-70"
-                        style={{ aspectRatio: ratioToCss(r.value) }}
-                      />
-                      {r.label}
-                      <span className="opacity-60">{r.hint}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* crisp title text overlay */}
-              <div
-                ref={titleRef}
-                className="rounded-xl border border-line bg-surface p-4"
+        <div className="min-w-0 space-y-6">
+          <div>
+            <label className="mb-2 block text-sm font-medium">Prompt</label>
+            <textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) generate();
+              }}
+              rows={4}
+              placeholder="A travel poster for Kashmir — snow peaks, a shikara on Dal Lake, autumn chinar trees…"
+              className={`${inputCls} resize-none`}
+            />
+            <div className="mt-2 flex items-center justify-between">
+              <button
+                onClick={() => setEnhance(!enhance)}
+                className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                  enhance ? "pill-active pill" : "pill"
+                }`}
+                title="An AI rewrites your idea with richer art direction"
               >
-                <label className="flex cursor-pointer items-center justify-between">
-                  <span className="text-sm font-medium">
-                    ✍️ Add title text{" "}
-                    <span className="font-normal text-muted">
-                      — perfectly spelled
-                    </span>
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={showTitle}
-                    onChange={(e) => setShowTitle(e.target.checked)}
-                    className="h-4 w-4 accent-accent"
-                  />
-                </label>
-                {showTitle && (
-                  <div className="mt-3 space-y-3">
-                    <input
-                      value={title}
-                      onChange={(e) => setTitle(e.target.value.slice(0, 40))}
-                      placeholder="Title (e.g. VENICE)"
-                      className={inputCls}
-                    />
-                    <input
-                      value={subtitle}
-                      onChange={(e) => setSubtitle(e.target.value.slice(0, 70))}
-                      placeholder="Subtitle (optional)"
-                      className={inputCls}
-                    />
-                    <div className="flex gap-2">
-                      {(["top", "center", "bottom"] as const).map((p) => (
-                        <button
-                          key={p}
-                          onClick={() => setPlacement(p)}
-                          className={`pill flex-1 rounded-lg py-2 text-xs capitalize ${
-                            placement === p ? "pill-active" : ""
-                          }`}
-                        >
-                          {p}
-                        </button>
-                      ))}
-                    </div>
-                    <p className="text-xs leading-5 text-muted">
-                      Text is typeset over the image after generation, so it&apos;s
-                      always crisp and correctly spelled.
-                    </p>
-                  </div>
-                )}
-              </div>
+                🪄 AI enhance {enhance ? "on" : "off"}
+              </button>
+              <p className="text-xs text-muted">Ctrl+Enter to generate</p>
+            </div>
+            {wantsText && !showTitle && (
+              <button
+                onClick={() => {
+                  setShowTitle(true);
+                  titleRef.current?.scrollIntoView({
+                    behavior: "smooth",
+                    block: "center",
+                  });
+                }}
+                className="mt-2 w-full rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-left text-xs leading-5 text-foreground"
+              >
+                💡 Looks like you want a poster with words. The AI can&apos;t
+                spell reliably — <b>tap here to add crisp title text</b>{" "}
+                instead.
+              </button>
+            )}
+          </div>
 
-              <div>
-                <label className="mb-2 block text-sm font-medium">
-                  Images per run
-                </label>
-                <div className="flex gap-2">
-                  {[1, 2, 3, 4].map((n) => (
-                    <button
-                      key={n}
-                      onClick={() => setCount(n)}
-                      className={`pill h-9 w-9 rounded-lg text-sm ${
-                        count === n ? "pill-active" : ""
-                      }`}
-                    >
-                      {n}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
+          <div>
+            <label className="mb-2 block text-sm font-medium">Style</label>
+            <div className="-mx-4 flex min-w-0 gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 sm:pb-0">
+              {STYLE_PRESETS.map((s) => (
                 <button
-                  onClick={() => setShowAdvanced(!showAdvanced)}
-                  className="text-xs text-muted hover:text-foreground"
-                >
-                  {showAdvanced ? "▾" : "▸"} Advanced settings
-                </button>
-                {showAdvanced && (
-                  <div className="mt-3 grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="mb-1 block text-xs text-muted">
-                        Seed
-                      </label>
-                      <input
-                        value={seed}
-                        onChange={(e) =>
-                          setSeed(e.target.value.replace(/\D/g, ""))
-                        }
-                        placeholder="random"
-                        className={inputCls}
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-xs text-muted">
-                        Steps (1–4)
-                      </label>
-                      <input
-                        value={steps}
-                        onChange={(e) => {
-                          const v = e.target.value.replace(/\D/g, "");
-                          setSteps(v && parseInt(v, 10) > 4 ? "4" : v);
-                        }}
-                        placeholder="auto"
-                        className={inputCls}
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-            </>
-          ) : (
-            <>
-              <div>
-                <label className="mb-2 block text-sm font-medium">
-                  Your image
-                </label>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={(e) => handleFile(e.target.files?.[0])}
-                />
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    setDragOver(true);
-                  }}
-                  onDragLeave={() => setDragOver(false)}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    setDragOver(false);
-                    handleFile(e.dataTransfer.files?.[0]);
-                  }}
-                  className={`card flex w-full flex-col items-center justify-center rounded-2xl border-2 border-dashed p-6 text-sm text-muted transition-colors ${
-                    dragOver ? "border-accent" : "border-line"
+                  key={s.id}
+                  onClick={() => setStyleId(s.id)}
+                  className={`pill shrink-0 whitespace-nowrap rounded-full px-3 py-1.5 text-xs ${
+                    styleId === s.id ? "pill-active" : ""
                   }`}
                 >
-                  {uploadedImage ? (
-                    <>
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={uploadedImage}
-                        alt="uploaded"
-                        className="max-h-56 rounded-xl"
-                      />
-                      <span className="mt-3 text-xs">
-                        Click or drop to replace · format {uploadRatio}
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="mb-2 text-3xl">🖼</span>
-                      Click or drag & drop a photo
-                      <span className="mt-1 text-xs opacity-70">
-                        JPEG, PNG or WebP
-                      </span>
-                    </>
-                  )}
+                  {s.emoji} {s.label}
                 </button>
-              </div>
+              ))}
+            </div>
+          </div>
 
-              <div>
-                <label className="mb-2 block text-sm font-medium">
-                  What should change?
-                </label>
-                <textarea
-                  value={instruction}
-                  onChange={(e) => setInstruction(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey))
-                      generate();
-                  }}
-                  rows={3}
-                  placeholder="Make it a watercolor painting… / Turn the sky into sunset… / Add falling snow…"
-                  className={`${inputCls} resize-none`}
+          <div>
+            <label className="mb-2 block text-sm font-medium">Format</label>
+            <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-3">
+              {RATIO_OPTIONS.map((r) => (
+                <button
+                  key={r.value}
+                  onClick={() => setAspectRatio(r.value)}
+                  className={`pill flex flex-col items-center rounded-xl px-2 py-2.5 text-xs ${
+                    aspectRatio === r.value ? "pill-active" : ""
+                  }`}
+                >
+                  <span
+                    className="mb-1.5 block w-5 rounded-[3px] border border-current opacity-70"
+                    style={{ aspectRatio: ratioToCss(r.value) }}
+                  />
+                  {r.label}
+                  <span className="opacity-60">{r.hint}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* crisp title text overlay */}
+          <div
+            ref={titleRef}
+            className="rounded-xl border border-line bg-surface p-4"
+          >
+            <label className="flex cursor-pointer items-center justify-between gap-3">
+              <span className="text-sm font-medium">
+                ✍️ Add title text{" "}
+                <span className="font-normal text-muted">
+                  — perfectly spelled
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                checked={showTitle}
+                onChange={(e) => setShowTitle(e.target.checked)}
+                className="h-4 w-4 shrink-0 accent-accent"
+              />
+            </label>
+            {showTitle && (
+              <div className="mt-3 space-y-3">
+                <input
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value.slice(0, 40))}
+                  placeholder="Title (e.g. VENICE)"
+                  className={inputCls}
                 />
+                <input
+                  value={subtitle}
+                  onChange={(e) => setSubtitle(e.target.value.slice(0, 70))}
+                  placeholder="Subtitle (optional)"
+                  className={inputCls}
+                />
+                <div className="flex gap-2">
+                  {(["top", "center", "bottom"] as const).map((p) => (
+                    <button
+                      key={p}
+                      onClick={() => setPlacement(p)}
+                      className={`pill flex-1 rounded-lg py-2 text-xs capitalize ${
+                        placement === p ? "pill-active" : ""
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs leading-5 text-muted">
+                  Text is typeset over the image after generation, so it&apos;s
+                  always crisp and correctly spelled.
+                </p>
               </div>
+            )}
+          </div>
 
-              <p className="rounded-xl border border-line bg-surface px-4 py-3 text-xs leading-5 text-muted">
-                ℹ️ Reimagine studies your photo with a vision AI, then recreates
-                it with your change applied. The result is a fresh
-                interpretation — close to your original, not a pixel-exact
-                edit.
-              </p>
-            </>
-          )}
+          <div>
+            <label className="mb-2 block text-sm font-medium">
+              Images per run
+            </label>
+            <div className="flex gap-2">
+              {[1, 2, 3, 4].map((n) => (
+                <button
+                  key={n}
+                  onClick={() => setCount(n)}
+                  className={`pill h-9 w-9 rounded-lg text-sm ${
+                    count === n ? "pill-active" : ""
+                  }`}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <button
+              onClick={() => setShowAdvanced(!showAdvanced)}
+              className="text-xs text-muted hover:text-foreground"
+            >
+              {showAdvanced ? "▾" : "▸"} Advanced settings
+            </button>
+            {showAdvanced && (
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs text-muted">Seed</label>
+                  <input
+                    value={seed}
+                    onChange={(e) => setSeed(e.target.value.replace(/\D/g, ""))}
+                    placeholder="random"
+                    className={inputCls}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs text-muted">
+                    Steps (1–4)
+                  </label>
+                  <input
+                    value={steps}
+                    onChange={(e) => {
+                      const v = e.target.value.replace(/\D/g, "");
+                      setSteps(v && parseInt(v, 10) > 4 ? "4" : v);
+                    }}
+                    placeholder="auto"
+                    className={inputCls}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
 
           <button
             onClick={generate}
@@ -562,12 +364,8 @@ function StudioInner() {
             className="btn-accent w-full rounded-xl py-3.5 font-semibold"
           >
             {busy
-              ? mode === "edit"
-                ? "Reimagining…"
-                : "Generating…"
-              : mode === "edit"
-                ? "✳ Reimagine"
-                : `✳ Generate${count > 1 ? " " + count + " images" : ""}`}
+              ? "Generating…"
+              : `✳ Generate${count > 1 ? " " + count + " images" : ""}`}
           </button>
 
           {errors.map((e, i) => (
@@ -581,7 +379,7 @@ function StudioInner() {
         </div>
 
         {/* ---------- results ---------- */}
-        <div>
+        <div className="min-w-0">
           {results.length === 0 && pendingCount === 0 && (
             <div className="flex h-full min-h-60 flex-col items-center justify-center rounded-2xl border border-dashed border-line text-muted lg:min-h-80">
               <span className="mb-3 text-4xl">✳</span>
@@ -589,9 +387,7 @@ function StudioInner() {
             </div>
           )}
           <div
-            className={`grid gap-4 ${
-              mode === "create" && count > 1 ? "sm:grid-cols-2" : "grid-cols-1"
-            }`}
+            className={`grid gap-4 ${count > 1 ? "sm:grid-cols-2" : "grid-cols-1"}`}
           >
             {results.map((img) => (
               <figure key={img.id}>
@@ -647,7 +443,7 @@ function StudioInner() {
               <div
                 key={`pending-${i}`}
                 className="shimmer w-full rounded-2xl"
-                style={{ aspectRatio: ratioToCss(resultRatio) }}
+                style={{ aspectRatio: ratioToCss(aspectRatio) }}
               />
             ))}
           </div>
