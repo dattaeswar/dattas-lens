@@ -6,9 +6,17 @@ import { put, del, list } from "@vercel/blob";
 /**
  * Image store with two backends, chosen automatically:
  * - Local filesystem (./data) when no BLOB_READ_WRITE_TOKEN is set — used in
- *   local dev, where the disk is real and persistent.
+ *   local dev, where the disk is real and persistent, and every request is
+ *   handled by the same single process.
  * - Vercel Blob when BLOB_READ_WRITE_TOKEN is present — used in production on
- *   Vercel, whose function filesystem is read-only/ephemeral.
+ *   Vercel, whose function filesystem is read-only/ephemeral AND whose
+ *   requests are handled by many concurrent, independent instances. Each
+ *   image's metadata lives in its own blob (`meta/{id}.json`) rather than a
+ *   single shared index file — a shared index requires read-modify-write,
+ *   and concurrent instances have no way to coordinate that lock, so two
+ *   generations landing on different instances at the same time would
+ *   silently clobber each other's index entry (image uploaded, entry lost,
+ *   permanent 404). Per-id files can't collide since every id is unique.
  */
 
 const USE_BLOB = Boolean(process.env.BLOB_READ_WRITE_TOKEN);
@@ -16,7 +24,13 @@ const USE_BLOB = Boolean(process.env.BLOB_READ_WRITE_TOKEN);
 const DATA_DIR = path.join(process.cwd(), "data");
 const IMAGES_DIR = path.join(DATA_DIR, "images");
 const INDEX_FILE = path.join(DATA_DIR, "index.json");
-const INDEX_BLOB_PATH = "index.json";
+
+function blobImagePath(id: string): string {
+  return `images/${id}.jpg`;
+}
+function blobMetaPath(id: string): string {
+  return `meta/${id}.json`;
+}
 
 export interface ImageRecord {
   id: string;
@@ -103,58 +117,70 @@ async function fsDeleteImage(id: string): Promise<boolean> {
 
 // --------------------------------------------------------------- vercel blob
 
-async function blobReadIndex(): Promise<ImageRecord[]> {
-  const { blobs } = await list({ prefix: INDEX_BLOB_PATH, limit: 1 });
-  const match = blobs.find((b) => b.pathname === INDEX_BLOB_PATH);
-  if (!match) return [];
-  const res = await fetch(match.url, { cache: "no-store" });
-  if (!res.ok) return [];
-  return (await res.json()) as ImageRecord[];
-}
-
-async function blobWriteIndex(index: ImageRecord[]): Promise<void> {
-  await put(INDEX_BLOB_PATH, JSON.stringify(index), {
-    access: "public",
-    addRandomSuffix: false,
-    contentType: "application/json",
-    allowOverwrite: true,
-  });
-}
-
 async function blobSaveImage(
   base64: string,
   meta: Omit<ImageRecord, "id" | "createdAt" | "blobUrl">,
 ): Promise<ImageRecord> {
-  return withLock(async () => {
-    const id = crypto.randomUUID();
-    const { url } = await put(`images/${id}.jpg`, Buffer.from(base64, "base64"), {
-      access: "public",
-      addRandomSuffix: false,
-      contentType: "image/jpeg",
-    });
-    const record: ImageRecord = {
-      id,
-      createdAt: new Date().toISOString(),
-      blobUrl: url,
-      ...meta,
-    };
-    const index = await blobReadIndex();
-    index.unshift(record);
-    await blobWriteIndex(index);
-    return record;
+  const id = crypto.randomUUID();
+  const { url } = await put(blobImagePath(id), Buffer.from(base64, "base64"), {
+    access: "public",
+    addRandomSuffix: false,
+    contentType: "image/jpeg",
   });
+  const record: ImageRecord = {
+    id,
+    createdAt: new Date().toISOString(),
+    blobUrl: url,
+    ...meta,
+  };
+  // Written after the image so a reader never sees metadata for a
+  // not-yet-uploaded image, but nothing else reads or rewrites this file —
+  // each id gets its own, so there's nothing for a concurrent request to race.
+  await put(blobMetaPath(id), JSON.stringify(record), {
+    access: "public",
+    addRandomSuffix: false,
+    contentType: "application/json",
+  });
+  return record;
+}
+
+async function blobListImages(limit: number): Promise<ImageRecord[]> {
+  const { blobs } = await list({ prefix: "meta/" });
+  const sorted = blobs
+    .slice()
+    .sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime())
+    .slice(0, limit);
+  const records = await Promise.all(
+    sorted.map(async (b) => {
+      const res = await fetch(b.url, { cache: "no-store" });
+      if (!res.ok) return null;
+      return (await res.json()) as ImageRecord;
+    }),
+  );
+  return records.filter((r): r is ImageRecord => r !== null);
+}
+
+async function blobGetImageRecord(id: string): Promise<ImageRecord | null> {
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
+  const metaPathStr = blobMetaPath(id);
+  const { blobs } = await list({ prefix: metaPathStr, limit: 1 });
+  const match = blobs.find((b) => b.pathname === metaPathStr);
+  if (!match) return null;
+  const res = await fetch(match.url, { cache: "no-store" });
+  if (!res.ok) return null;
+  return (await res.json()) as ImageRecord;
 }
 
 async function blobDeleteImage(id: string): Promise<boolean> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return false;
-  return withLock(async () => {
-    const index = await blobReadIndex();
-    const record = index.find((r) => r.id === id);
-    if (!record) return false;
-    await blobWriteIndex(index.filter((r) => r.id !== id));
-    if (record.blobUrl) await del(record.blobUrl);
-    return true;
-  });
+  const record = await blobGetImageRecord(id);
+  if (!record) return false;
+  const metaPathStr = blobMetaPath(id);
+  const { blobs } = await list({ prefix: metaPathStr, limit: 1 });
+  const metaUrl = blobs.find((b) => b.pathname === metaPathStr)?.url;
+  const urls = [record.blobUrl, metaUrl].filter((u): u is string => Boolean(u));
+  await del(urls);
+  return true;
 }
 
 // ---------------------------------------------------------------- public API
@@ -167,7 +193,8 @@ export async function saveImage(
 }
 
 export async function listImages(limit = 100): Promise<ImageRecord[]> {
-  const index = USE_BLOB ? await blobReadIndex() : await fsReadIndex();
+  if (USE_BLOB) return blobListImages(limit);
+  const index = await fsReadIndex();
   return index.slice(0, limit);
 }
 
@@ -179,8 +206,7 @@ export async function getImagePath(id: string): Promise<string | null> {
 /** Blob backend only — the record carries its public CDN URL. */
 export async function getImageRecord(id: string): Promise<ImageRecord | null> {
   if (!USE_BLOB) return null;
-  const index = await blobReadIndex();
-  return index.find((r) => r.id === id) ?? null;
+  return blobGetImageRecord(id);
 }
 
 export async function deleteImage(id: string): Promise<boolean> {
