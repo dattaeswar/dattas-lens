@@ -117,6 +117,27 @@ async function fsDeleteImage(id: string): Promise<boolean> {
 
 // --------------------------------------------------------------- vercel blob
 
+const LEGACY_INDEX_PATH = "index.json";
+
+/**
+ * Read-only support for images saved before the per-id meta scheme, which
+ * only exist in the old shared index.json. Never written to again — reading
+ * it can't race with anything, so it's safe to keep as a fallback for
+ * pre-existing history without reintroducing the write-side bug.
+ */
+async function blobReadLegacyIndex(): Promise<ImageRecord[]> {
+  try {
+    const { blobs } = await list({ prefix: LEGACY_INDEX_PATH, limit: 1 });
+    const match = blobs.find((b) => b.pathname === LEGACY_INDEX_PATH);
+    if (!match) return [];
+    const res = await fetch(match.url, { cache: "no-store" });
+    if (!res.ok) return [];
+    return (await res.json()) as ImageRecord[];
+  } catch {
+    return [];
+  }
+}
+
 async function blobSaveImage(
   base64: string,
   meta: Omit<ImageRecord, "id" | "createdAt" | "blobUrl">,
@@ -150,14 +171,21 @@ async function blobListImages(limit: number): Promise<ImageRecord[]> {
     .slice()
     .sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime())
     .slice(0, limit);
-  const records = await Promise.all(
-    sorted.map(async (b) => {
-      const res = await fetch(b.url, { cache: "no-store" });
-      if (!res.ok) return null;
-      return (await res.json()) as ImageRecord;
-    }),
-  );
-  return records.filter((r): r is ImageRecord => r !== null);
+  const [records, legacy] = await Promise.all([
+    Promise.all(
+      sorted.map(async (b) => {
+        const res = await fetch(b.url, { cache: "no-store" });
+        if (!res.ok) return null;
+        return (await res.json()) as ImageRecord;
+      }),
+    ),
+    blobReadLegacyIndex(),
+  ]);
+  const current = records.filter((r): r is ImageRecord => r !== null);
+  const currentIds = new Set(current.map((r) => r.id));
+  const merged = [...current, ...legacy.filter((r) => !currentIds.has(r.id))];
+  merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  return merged.slice(0, limit);
 }
 
 async function blobGetImageRecord(id: string): Promise<ImageRecord | null> {
@@ -165,22 +193,46 @@ async function blobGetImageRecord(id: string): Promise<ImageRecord | null> {
   const metaPathStr = blobMetaPath(id);
   const { blobs } = await list({ prefix: metaPathStr, limit: 1 });
   const match = blobs.find((b) => b.pathname === metaPathStr);
-  if (!match) return null;
-  const res = await fetch(match.url, { cache: "no-store" });
-  if (!res.ok) return null;
-  return (await res.json()) as ImageRecord;
+  if (match) {
+    const res = await fetch(match.url, { cache: "no-store" });
+    if (res.ok) return (await res.json()) as ImageRecord;
+  }
+  // Fall back to pre-migration images that only live in the legacy index.
+  const legacy = await blobReadLegacyIndex();
+  return legacy.find((r) => r.id === id) ?? null;
 }
 
 async function blobDeleteImage(id: string): Promise<boolean> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return false;
-  const record = await blobGetImageRecord(id);
-  if (!record) return false;
   const metaPathStr = blobMetaPath(id);
   const { blobs } = await list({ prefix: metaPathStr, limit: 1 });
-  const metaUrl = blobs.find((b) => b.pathname === metaPathStr)?.url;
-  const urls = [record.blobUrl, metaUrl].filter((u): u is string => Boolean(u));
-  await del(urls);
-  return true;
+  const metaMatch = blobs.find((b) => b.pathname === metaPathStr);
+
+  if (metaMatch) {
+    const res = await fetch(metaMatch.url, { cache: "no-store" });
+    const record = res.ok ? ((await res.json()) as ImageRecord) : null;
+    const urls = [record?.blobUrl, metaMatch.url].filter(
+      (u): u is string => Boolean(u),
+    );
+    await del(urls);
+    return true;
+  }
+
+  // Legacy image: only rewrite the shared index for this rare, user-initiated
+  // path, never on every generation, so it can't reproduce the create race.
+  return withLock(async () => {
+    const legacy = await blobReadLegacyIndex();
+    const record = legacy.find((r) => r.id === id);
+    if (!record) return false;
+    await put(LEGACY_INDEX_PATH, JSON.stringify(legacy.filter((r) => r.id !== id)), {
+      access: "public",
+      addRandomSuffix: false,
+      contentType: "application/json",
+      allowOverwrite: true,
+    });
+    if (record.blobUrl) await del(record.blobUrl);
+    return true;
+  });
 }
 
 // ---------------------------------------------------------------- public API
